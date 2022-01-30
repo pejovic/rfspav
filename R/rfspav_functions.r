@@ -2,7 +2,7 @@
 #' @description Random Forest SPatial Variants
 #' @param formula Formula
 #' @param data Data
-#' @param coord_names Names of columns containing spatial coordinates
+#' @param coord_names Names of columns containing spatial coordinates, Default: c("Longitude", "Latitude")
 #' @param neighbors Neighbours, Default: 5
 #' @param type Type of Random Forest Spatial Variants, Default: c("rf", "rfsp", "rfsi", "rfsig")
 #' @param mtry Number of variables to possibly split at in each node. Default is the (rounded down) square root of the number variables. Alternatively, a single argument function returning an integer, given the number of independent variables.
@@ -25,7 +25,8 @@
 #' @importFrom stats as.formula
 #' @importFrom sf st_as_sf st_drop_geometry
 #' @importFrom classInt classIntervals
-#' @importFrom doParallel registerDoParallel detectCores
+#' @importFrom doParallel registerDoParallel
+#' @importFrom parallel detectCores
 #' @importFrom foreach foreach
 #' @importFrom purrr map
 #' @importFrom dplyr group_split relocate
@@ -51,6 +52,7 @@ rfspav <- function(formula,
                  feature_select = FALSE,
                  data_crs = NA, ...){
 
+  #coord_names = coord_names
   type <- match.arg(type)
   clust_style = match.arg(clust_style)
   formula <- as.formula(formula)
@@ -69,11 +71,11 @@ rfspav <- function(formula,
   } else if (type == "rfsp"){
     if (progress) print('Fitting RFSP model ...')
     if(any(is.na(coord_names))){stop("coord_names must be specified for RFSP model")}
-    data.sf <- data %>% sf::st_as_sf(., coords = coord_names, crs = data_crs, remove = FALSE)
-    zcol_classes <- classInt::classIntervals(data[, y_name][[1]], n = n_class_levels, style = clust_style)
-    data.sf$zcol_cut_classes <- cut(data[, y_name][[1]], breaks = zcol_classes$brks, ordered_result = TRUE, include.lowest =TRUE)
+    data.sf <- data.df %>% sf::st_as_sf(., coords = coord_names, crs = data_crs, remove = FALSE)
+    zcol_classes <- classInt::classIntervals(data.sf[, y_name][[1]], n = n_class_levels, style = clust_style)
+    data.sf$zcol_cut_classes <- cut(data.sf[, y_name][[1]], breaks = zcol_classes$brks, ordered_result = TRUE, include.lowest =TRUE)
     doParallel::registerDoParallel(cores = cpus)
-    dist.data <- foreach::foreach(i = 1:dim(data.sf)[1], .combine = rbind) %dopar% purrr::map(.x = dplyr::group_split(data.sf[-i, ], zcol_cut_classes, .keep = FALSE), .f = ~unlist(nngeo::st_nn( data.sf[i, ], .x, returnDist = TRUE, progress = TRUE)$dist[[1]]))
+    dist.data <- foreach::foreach(i = 1:dim(data.sf)[1], .combine = rbind) %dopar% purrr::map(.x = dplyr::group_split(data.sf[-i, ], zcol_cut_classes, .keep = FALSE), .f = ~unlist(nngeo::st_nn(data.sf[i, ], .x, returnDist = TRUE, progress = TRUE)$dist[[1]]))
     dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("dist_class", 1:n_class_levels, sep = "_"))
     data.df <- cbind(sf::st_drop_geometry(data.sf), dist.data)
     formula <- as.formula(paste(y_name, paste(c(x_names, names(dist.data)), collapse = "+"), sep = "~"))
@@ -128,6 +130,7 @@ rfspav <- function(formula,
 #' @param object Model
 #' @param new_data New data
 #' @param cpus Number of cores, Default: detectCores() - 1
+#' @param progress Progress, Default: TRUE
 #' @param ... PARAM_DESCRIPTION
 #' @return OUTPUT_DESCRIPTION
 #' @details DETAILS
@@ -136,14 +139,15 @@ rfspav <- function(formula,
 #' @export
 #' @importFrom stats as.formula predict
 #' @importFrom sf st_as_sf st_drop_geometry
-#' @importFrom doParallel registerDoParallel detectCores
+#' @importFrom doParallel registerDoParallel
+#' @importFrom parallel detectCores
 #' @importFrom foreach foreach
 #' @importFrom purrr map
 #' @importFrom dplyr group_split
 #' @importFrom nngeo st_nn
 #' @importFrom magrittr set_colnames %>%
 #' @importFrom gower gower_topn
-predict.rfspav <- function(object, new_data, cpus = detectCores()-1, ...){
+predict.rfspav <- function(object, new_data, cpus = detectCores()-1, progress = TRUE, ...){
   model <- object$model
   training_data <- object$data
   formula <- object$formula
@@ -162,6 +166,7 @@ predict.rfspav <- function(object, new_data, cpus = detectCores()-1, ...){
 
   if(type == "rf"){
     if (progress) print('Predicting RF model ...')
+    new_data.df <- new_data
   } else if (type == "rfsp"){
     if (progress) print('Predicting RFSP model ...')
     training_data.sf <- training_data %>% sf::st_as_sf(., coords = coord_names, crs = crs, remove = FALSE)
@@ -186,8 +191,8 @@ predict.rfspav <- function(object, new_data, cpus = detectCores()-1, ...){
 
   } else if (type == "rfsig") {
     if (progress) print('Predicting RFSIG model ...')
-    obs.dist.data <- as.list(rep(NA, dim(new_data.df)[1]))
-    for(i in 1:dim(new_data.df)[1]){
+    obs.dist.data <- as.list(rep(NA, dim(new_data)[1]))
+    for(i in 1:dim(new_data)[1]){
       obs.dist.data[[i]] <- gower::gower_topn(new_data[i, gower_vars], training_data[, gower_vars], n = neighbors)
     }
     doParallel::registerDoParallel(cores = cpus)
