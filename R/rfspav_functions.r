@@ -13,7 +13,7 @@
 #' @param importance Type of variable importance, Default: 'impurity'
 #' @param gower_vars Variables for gower distance calculation, Default: NA
 #' @param clust_style Type of methods for choosing univariate class intervals of target variables (only for "rfsp" approach), Default: c("sd", "equal", "pretty", "quantile", "kmeans", "hclust")
-#' @param n_class_levels Number of class intervals, Default: 10
+#' @param num_class Number of class intervals, Default: 10
 #' @param feature_select Should Feature Selection algorithm be applied (only for "rfsig" approach), Default: FALSE
 #' @param data_crs Data CRS, Default: NA
 #' @param ... Additional parameters for ranger Random Forest implementation.
@@ -25,9 +25,6 @@
 #' @importFrom stats as.formula
 #' @importFrom sf st_as_sf st_drop_geometry
 #' @importFrom classInt classIntervals
-#' @importFrom doParallel registerDoParallel
-#' @importFrom parallel detectCores
-#' @importFrom foreach foreach
 #' @importFrom purrr map
 #' @importFrom dplyr group_split relocate
 #' @importFrom nngeo st_nn
@@ -44,11 +41,10 @@ rfspav <- function(formula,
                  mtry = NULL,
                  min.node.size = NULL,
                  progress = TRUE,
-                 cpus = detectCores()-1,
                  importance = "impurity",
                  gower_vars = NA,
-                 clust_style = c( "sd", "equal", "pretty", "quantile", "kmeans", "hclust"),
-                 n_class_levels = 10,
+                 clust_style = c("sd", "equal", "pretty", "quantile", "kmeans", "hclust"),
+                 num_class = 10,
                  feature_select = FALSE,
                  data_crs = NA, ...){
 
@@ -71,27 +67,41 @@ rfspav <- function(formula,
   } else if (type == "rfsp"){
     if (progress) print('Fitting RFSP model ...')
     if(any(is.na(coord_names))){stop("coord_names must be specified for RFSP model")}
+
     data.sf <- data.df %>% sf::st_as_sf(., coords = coord_names, crs = data_crs, remove = FALSE)
-    zcol_classes <- classInt::classIntervals(data.sf[, y_name][[1]], n = n_class_levels, style = clust_style)
+    zcol_classes <- classInt::classIntervals(data.sf[, y_name][[1]], n = num_class, style = clust_style)
     data.sf$zcol_cut_classes <- cut(data.sf[, y_name][[1]], breaks = zcol_classes$brks, ordered_result = TRUE, include.lowest =TRUE)
-    doParallel::registerDoParallel(cores = cpus)
-    dist.data <- foreach::foreach(i = 1:dim(data.sf)[1], .combine = rbind) %dopar% purrr::map(.x = dplyr::group_split(data.sf[-i, ], zcol_cut_classes, .keep = FALSE), .f = ~unlist(nngeo::st_nn(data.sf[i, ], .x, returnDist = TRUE, progress = TRUE)$dist[[1]]))
-    dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("dist_class", 1:n_class_levels, sep = "_"))
+
+    dist.data <- matrix(NA, ncol = num_class, nrow = dim(data.sf)[1])
+    for(i in 1:dim(data.sf)[1]){
+      dist.data[i, ] <- suppressMessages(unlist(purrr::map(.x = dplyr::group_split(data.sf[-i, ], zcol_cut_classes, .keep = FALSE), .f = ~unlist(nngeo::st_nn(data.sf[i, ], .x, returnDist = TRUE, progress = TRUE)$dist[[1]]))))
+    }
+
+    dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("dist_class", 1:num_class, sep = "_"))
     data.df <- cbind(sf::st_drop_geometry(data.sf), dist.data)
     formula <- as.formula(paste(y_name, paste(c(x_names, names(dist.data)), collapse = "+"), sep = "~"))
+
   } else if (type == "rfsi") {
     if (progress) print('Fitting RFSI model ...')
     if(any(is.na(coord_names))){stop("coord_names must be specified for RFSP model")}
     data.sf <- data.df %>% sf::st_as_sf(., coords = coord_names, crs = data_crs, remove = FALSE)
-    doParallel::registerDoParallel(cores = cpus)
-    obs.dist.data <- foreach::foreach(i = 1:dim(data.sf)[1]) %dopar% nngeo::st_nn(data.sf[i, ], data.sf[-i, ], k = neighbors, returnDist = TRUE, progress = FALSE)
-    doParallel::registerDoParallel(cores = cpus)
-    obs.data <- foreach::foreach(i = 1:dim(data.sf)[1], .combine = rbind) %dopar% data.df[-i, ][[y_name]][obs.dist.data[[i]]$nn[[1]]]
+
+    obs.dist.data <- as.list(rep(NA, dim(data.sf)[1]))
+    for(i in 1:dim(data.sf)[1]){
+      obs.dist.data[[i]] <- suppressMessages(nngeo::st_nn(data.sf[i, ], data.sf[-i, ], k = neighbors, returnDist = TRUE, progress = FALSE))
+    }
+    for(i in 1:dim(data.sf)[1]){
+      obs.dist.data[[i]]$nn[[1]] <- data.sf[-i, ][[y_name]][obs.dist.data[[i]]$nn[[1]]]
+    }
+
+    obs.data <- lapply(obs.dist.data, function(x) x$nn[[1]]) %>% do.call(rbind, .)
     obs.data <- obs.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("near_obs", 1:neighbors, sep = "_"))
-    dist.data <- purrr::map(.x = obs.dist.data, .f = ~.x$dist[[1]]) %>% do.call("rbind", .)
+    dist.data <- lapply(obs.dist.data, function(x) x$dist[[1]]) %>% do.call(rbind, .)
     dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("distance", 1:neighbors, sep = "_"))
+
     data.df <- cbind(sf::st_drop_geometry(data.sf), obs.data, dist.data)
     formula <- as.formula(paste(y_name, paste(c(x_names, names(obs.data), names(dist.data)), collapse = "+"), sep = "~"))
+
   } else if (type == "rfsig") {
     if (progress) print('Fitting RFSIG model ...')
     if(any(is.na(coord_names))){stop("coord_names must be specified for RFSIG model")}
@@ -105,15 +115,20 @@ rfspav <- function(formula,
       x_names <- unique(c(feature.selection, coord_names))
       formula <- as.formula(paste(paste(y_name,"~"), paste(x_names, collapse="+")))
     }
+
     obs.dist.data <- as.list(rep(NA, dim(data.df)[1]))
     for(i in 1:dim(data.df)[1]){
       obs.dist.data[[i]] <- gower::gower_topn(data.df[i, gower_vars], data.df[-i, gower_vars], n = neighbors)
     }
-    doParallel::registerDoParallel(cores = cpus)
-    obs.data <- foreach::foreach(i = 1:dim(data.df)[1], .combine = rbind) %dopar% data.df[-i, ][[y_name]][obs.dist.data[[i]]$index[, 1]]
+
+    for(i in 1:dim(data.df)[1]){
+      obs.dist.data[[i]]$index <- data.df[-i, ][[y_name]][obs.dist.data[[i]]$index[,1]]
+      obs.dist.data[[i]]$distance <- obs.dist.data[[i]]$distance[,1]
+    }
+
+    obs.data <- lapply(obs.dist.data, function(x) x$index) %>% do.call(rbind, .)
     obs.data <- obs.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("near_obs", 1:neighbors, sep = "_"))
-    doParallel::registerDoParallel(cores = cpus)
-    dist.data <- foreach::foreach(i = 1:dim(data.df)[1], .combine = rbind) %dopar% obs.dist.data[[i]]$distance[, 1]
+    dist.data <- lapply(obs.dist.data, function(x) x$dist) %>% do.call(rbind, .)
     dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("distance", 1:neighbors, sep = "_"))
     data.df <- cbind(data.df, obs.data, dist.data)
     formula <- as.formula(paste(y_name, paste(c(x_names, names(obs.data), names(dist.data)), collapse = "+"), sep = "~"))
@@ -121,7 +136,7 @@ rfspav <- function(formula,
   model <- ranger::ranger(formula, data = data.df, num.trees = trees, mtry = mtry, min.node.size = min.node.size, ...)
   data.df <- data.df %>% dplyr::relocate(y_name, x_names, everything())
 
-  return(list(model = model, data = data.df, formula = formula, type = type, neighbors = neighbors, gower_vars = gower_vars, data_crs = data_crs, coord_names = coord_names))
+  return(list(model = model, data = data.df, formula = formula, type = type, neighbors = neighbors, num_class = num_class, gower_vars = gower_vars, data_crs = data_crs, coord_names = coord_names))
 }
 
 
@@ -139,20 +154,18 @@ rfspav <- function(formula,
 #' @export
 #' @importFrom stats as.formula predict
 #' @importFrom sf st_as_sf st_drop_geometry
-#' @importFrom doParallel registerDoParallel
-#' @importFrom parallel detectCores
-#' @importFrom foreach foreach
 #' @importFrom purrr map
 #' @importFrom dplyr group_split
 #' @importFrom nngeo st_nn
 #' @importFrom magrittr set_colnames %>%
 #' @importFrom gower gower_topn
-predict.rfspav <- function(object, new_data, cpus = detectCores()-1, progress = TRUE, ...){
+predict.rfspav <- function(object, new_data, progress = TRUE, ...){
   model <- object$model
   training_data <- object$data
   formula <- object$formula
   type = object$type
   neighbors <- object$neighbors
+  num_class <- object$num_class
   gower.vars <- object$gower_vars
   coord_names <- object$coord_names
   crs <- object$data_crs
@@ -171,22 +184,33 @@ predict.rfspav <- function(object, new_data, cpus = detectCores()-1, progress = 
     if (progress) print('Predicting RFSP model ...')
     training_data.sf <- training_data %>% sf::st_as_sf(., coords = coord_names, crs = crs, remove = FALSE)
     new_data.sf <- new_data %>% sf::st_as_sf(., coords = coord_names, crs = crs, remove = FALSE)
-    doParallel::registerDoParallel(cores = cpus)
-    dist.data <- foreach::foreach(i = 1:dim(new_data.sf)[1], .combine = rbind) %dopar% purrr::map(.x = dplyr::group_split(training_data.sf, zcol_cut_classes, .keep = FALSE), .f = ~unlist(nngeo::st_nn(new_data.sf[i, ], .x, returnDist = TRUE, progress = TRUE)$dist[[1]]))
-    dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("dist_class", 1:n_class_levels, sep = "_"))
+
+    dist.data <- matrix(NA, ncol = num_class, nrow = dim(new_data.sf)[1])
+    for(i in 1:dim(new_data.sf)[1]){
+      dist.data[i, ] <- suppressMessages(unlist(purrr::map(.x = dplyr::group_split(training_data.sf, zcol_cut_classes, .keep = FALSE), .f = ~unlist(nngeo::st_nn(new_data.sf[i, ], .x, returnDist = TRUE, progress = TRUE)$dist[[1]]))))
+    }
+
+    dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("dist_class", 1:num_class, sep = "_"))
     new_data.df <- cbind(sf::st_drop_geometry(new_data.sf), dist.data)
 
   } else if (type == "rfsi") {
     if (progress) print('Predicting RFSI model ...')
     training_data.sf <- training_data %>% sf::st_as_sf(., coords = coord_names, crs = crs, remove = FALSE)
     new_data.sf <- new_data %>% sf::st_as_sf(., coords = coord_names, crs = crs, remove = FALSE)
-    doParallel::registerDoParallel(cores = cpus)
-    obs.dist.data <- foreach::foreach(i = 1:dim(new_data.sf)[1]) %dopar% nngeo::st_nn(new_data.sf[i, ], training_data.sf, k = neighbors, returnDist = TRUE, progress = FALSE)
-    doParallel::registerDoParallel(cores = cpus)
-    obs.data <- foreach::foreach(i = 1:dim(new_data.sf)[1], .combine = rbind) %dopar% training_data.sf[[y_name]][obs.dist.data[[i]]$nn[[1]]]
+
+    obs.dist.data <- as.list(rep(NA, dim(new_data.sf)[1]))
+    for(i in 1:dim(new_data.sf)[1]){
+      obs.dist.data[[i]] <- suppressMessages(nngeo::st_nn(new_data.sf[i, ], training_data.sf, k = neighbors, returnDist = TRUE, progress = FALSE))
+    }
+    for(i in 1:dim(new_data.sf)[1]){
+      obs.dist.data[[i]]$nn[[1]] <-training_data.sf[[y_name]][obs.dist.data[[i]]$nn[[1]]]
+    }
+
+    obs.data <- lapply(obs.dist.data, function(x) x$nn[[1]]) %>% do.call(rbind, .)
     obs.data <- obs.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("near_obs", 1:neighbors, sep = "_"))
-    dist.data <- purrr::map(.x = obs.dist.data, .f = ~.x$dist[[1]]) %>% do.call("rbind", .)
+    dist.data <- lapply(obs.dist.data, function(x) x$dist[[1]]) %>% do.call(rbind, .)
     dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("distance", 1:neighbors, sep = "_"))
+
     new_data.df <- cbind(sf::st_drop_geometry(new_data.sf), obs.data, dist.data)
 
   } else if (type == "rfsig") {
@@ -195,11 +219,15 @@ predict.rfspav <- function(object, new_data, cpus = detectCores()-1, progress = 
     for(i in 1:dim(new_data)[1]){
       obs.dist.data[[i]] <- gower::gower_topn(new_data[i, gower_vars], training_data[, gower_vars], n = neighbors)
     }
-    doParallel::registerDoParallel(cores = cpus)
-    obs.data <- foreach::foreach(i = 1:dim(new_data)[1], .combine = rbind) %dopar% training_data[[y_name]][obs.dist.data[[i]]$index[, 1]]
+
+    for(i in 1:dim(new_data)[1]){
+      obs.dist.data[[i]]$index <- training_data[[y_name]][obs.dist.data[[i]]$index[,1]]
+      obs.dist.data[[i]]$distance <- obs.dist.data[[i]]$distance[,1]
+    }
+
+    obs.data <- lapply(obs.dist.data, function(x) x$index) %>% do.call(rbind, .)
     obs.data <- obs.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("near_obs", 1:neighbors, sep = "_"))
-    doParallel::registerDoParallel(cores = cpus)
-    dist.data <- foreach::foreach(i = 1:dim(new_data)[1], .combine = rbind) %dopar% obs.dist.data[[i]]$distance[, 1]
+    dist.data <- lapply(obs.dist.data, function(x) x$dist) %>% do.call(rbind, .)
     dist.data <- dist.data %>% as.data.frame(.) %>% magrittr::set_colnames(paste("distance", 1:neighbors, sep = "_"))
     new_data.df <- cbind(new_data, obs.data, dist.data)
   }

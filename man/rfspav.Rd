@@ -14,11 +14,10 @@ rfspav(
   mtry = NULL,
   min.node.size = NULL,
   progress = TRUE,
-  cpus = detectCores() - 1,
   importance = "impurity",
   gower_vars = NA,
   clust_style = c("sd", "equal", "pretty", "quantile", "kmeans", "hclust"),
-  n_class_levels = 10,
+  num_class = 10,
   feature_select = FALSE,
   data_crs = NA,
   ...
@@ -29,7 +28,7 @@ rfspav(
 
 \item{data}{Data}
 
-\item{coord_names}{Names of columns containing spatial coordinates}
+\item{coord_names}{Names of columns containing spatial coordinates, Default: c("Longitude", "Latitude")}
 
 \item{neighbors}{Neighbours, Default: 5}
 
@@ -41,15 +40,13 @@ rfspav(
 
 \item{progress}{Progress, Default: TRUE}
 
-\item{cpus}{Number of cores, Default: detectCores() - 1}
-
 \item{importance}{Type of variable importance, Default: 'impurity'}
 
 \item{gower_vars}{Variables for gower distance calculation, Default: NA}
 
 \item{clust_style}{Type of methods for choosing univariate class intervals of target variables (only for "rfsp" approach), Default: c("sd", "equal", "pretty", "quantile", "kmeans", "hclust")}
 
-\item{n_class_levels}{Number of class intervals, Default: 10}
+\item{num_class}{Number of class intervals, Default: 10}
 
 \item{feature_select}{Should Feature Selection algorithm be applied (only for "rfsig" approach), Default: FALSE}
 
@@ -58,6 +55,8 @@ rfspav(
 \item{...}{Additional parameters for ranger Random Forest implementation.}
 
 \item{num.trees}{Number of trees.}
+
+\item{cpus}{Number of cores, Default: detectCores() - 1}
 }
 \value{
 List of the following elements: Model, Data, Formula, etc.

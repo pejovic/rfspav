@@ -143,11 +143,11 @@ ames_test <- testing(data_split) %>% as.data.frame()
 ames.fun <- as.formula(paste("Sale_Price", paste(names(ames)[c(80, 81, 1:78)], collapse = "+"), sep = "~"))
 ames_train <- dplyr::sample_n(ames_train, 1000)
 
-rfspav(trees = 600, mtry = 4, min.node.size = 10) %>%
+rfsp(num_class = 5, trees = 600, mtry = 4, min.node.size = 10) %>%
   translate(engine = "rfspav")
 
 
-rfspav_spec <- rfspav(trees = 500) %>%
+rfspav_spec <- rfsp(trees = 500, num_class = 5) %>%
   set_engine("rfspav")
 
 translate(rfspav_spec)

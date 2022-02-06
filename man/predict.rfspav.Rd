@@ -4,16 +4,18 @@
 \alias{predict.rfspav}
 \title{predict.rfspav}
 \usage{
-\method{predict}{rfspav}(object, new_data, cpus = detectCores() - 1, ...)
+\method{predict}{rfspav}(object, new_data, progress = TRUE, ...)
 }
 \arguments{
 \item{object}{Model}
 
 \item{new_data}{New data}
 
-\item{cpus}{Number of cores, Default: detectCores() - 1}
+\item{progress}{Progress, Default: TRUE}
 
 \item{...}{PARAM_DESCRIPTION}
+
+\item{cpus}{Number of cores, Default: detectCores() - 1}
 }
 \value{
 OUTPUT_DESCRIPTION
