@@ -37,7 +37,7 @@ tune.rfspav <- function(formula,
                         num_class = 10,
                         feature_select = FALSE,
                         data_crs = NA,
-                        predict_resamples = FALSE, ...){
+                        best_params = TRUE, ...){
 
   type <- match.arg(type)
   clust_style = match.arg(clust_style)
@@ -51,17 +51,17 @@ tune.rfspav <- function(formula,
   grid_results <- data_resample
   grid_results$.results <- NA
 
-  cl <- makeCluster(cpus, outfile='LOG.TXT')
-  registerDoParallel(cl)
+  cl <- parallel::makeCluster(cpus, outfile='LOG.TXT')
+  dpParallel::registerDoParallel(cl)
   for(i in 1:length(grid_results$splits)){
     grid_results$.results[i] <- list(foreach::foreach(d = iter(param_grid, by='row'), .packages = c("rfspav", "foreach", "ranger")) %dopar% rfspav::predict.rfspav(rfspav::rfspav(formula = formula, data = grid_results$splits[[i]]$data[grid_results$splits[[i]]$in_id, ], coord_names = coord_names, type = type, clust_style = clust_style, neighbors = d$neighbors, mtry = d$mtry, trees = d$trees, min.node.size = d$min.node.size, ...), new_data = grid_results$splits[[i]]$data[-grid_results$splits[[i]]$in_id, ], ...))
   }
-  stopImplicitCluster()
+  doParallel::stopImplicitCluster()
 
   for(i in 1:length(grid_results$splits)){
     grid_results$.results[[i]] <- lapply(grid_results$.results[i], function(x) data.frame(t(do.call(rbind, x))) %>%
                                            magrittr::set_colnames(paste("Model", 1:dim(.)[2], sep = "_")) %>%
-                                           dplyr::mutate(.ind = which(!(1:dim(grid_results$splits[[i]]$data)[1] %in% grid_results$splits[[i]]$in_id)), .obs = grid_results$splits[[i]]$data[-grid_results$splits[[i]]$in_id, all.vars(formula)[1]]) %>%
+                                           dplyr::mutate(.ind = which(!(1:dim(grid_results$splits[[i]]$data)[1] %in% grid_results$splits[[i]]$in_id)), .obs = grid_results$splits[[i]]$data[-grid_results$splits[[i]]$in_id, ][[all.vars(formula)[1]]]) %>%
                                            tidyr::pivot_longer(., cols = starts_with("Model"), names_to = ".model", values_to = ".pred"))
   }
 
@@ -70,20 +70,20 @@ tune.rfspav <- function(formula,
   }
 
   grid_results$.results <- purrr::map(.x = grid_results$.results, .f = ~dplyr::group_by(.x, trees, neighbors, mtry, min.node.size, .model) %>%
-                                        nest() %>%
+                                        tidyr::nest() %>%
                                         dplyr::mutate(rmse = unlist(map(.x = data, .f = ~yardstick::rmse(.x, truth = .x$.obs, estimate = .x$.pred)$.estimate)),
                                                       rsq = unlist(map(.x = data, .f = ~yardstick::rsq(.x, truth = .x$.obs, estimate = .x$.pred)$.estimate))))
 
-  select_best_params <- function(x, metric = c("rmse", "rsq")){
-    metric = match.arg(metric)
-    summary_results <- do.call(rbind, x$.results) %>% group_by(trees, neighbors, mtry, min.node.size, .model) %>% dplyr::summarise(rmse = mean(rmse), rsq = mean(rsq))
-    best_results <- if(metric == "rmse") {summary_results %>% dplyr::arrange(rmse) %>% .[1, ]}else{summary_results %>% dplyr::arrange(desc(rsq)) %>% .[1, ]}
-    return(best_results)
-  }
 
+    return(return(grid_results))
 
-  best_params <- select_best_params(grid_results, metric = metric)
-  if(predict_resamples){return(grid_results)} else {return(best_params)}
+}
+
+select_best_params <- function(x, metric = c("rmse", "rsq")){
+  metric = match.arg(metric)
+  summary_results <- do.call(rbind, x$.results) %>% group_by(trees, neighbors, mtry, min.node.size, .model) %>% dplyr::summarise(rmse = mean(rmse), rsq = mean(rsq))
+  best_results <- if(metric == "rmse") {summary_results %>% dplyr::arrange(rmse) %>% .[1, ]}else{summary_results %>% dplyr::arrange(desc(rsq)) %>% .[1, ]}
+  return(best_results)
 }
 
 

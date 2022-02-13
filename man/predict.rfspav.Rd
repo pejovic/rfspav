@@ -14,8 +14,6 @@
 \item{progress}{Progress, Default: TRUE}
 
 \item{...}{PARAM_DESCRIPTION}
-
-\item{cpus}{Number of cores, Default: detectCores() - 1}
 }
 \value{
 OUTPUT_DESCRIPTION

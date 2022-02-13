@@ -28,7 +28,7 @@ rfspav(
 
 \item{data}{Data}
 
-\item{coord_names}{Names of columns containing spatial coordinates, Default: c("Longitude", "Latitude")}
+\item{coord_names}{Names of columns containing spatial coordinates}
 
 \item{neighbors}{Neighbours, Default: 5}
 
